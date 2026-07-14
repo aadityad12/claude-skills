@@ -7,6 +7,7 @@ Personal collection of [Claude Code](https://claude.com/claude-code) skills. Eac
 | Skill | What it does |
 |---|---|
 | [`github-cleanup`](github-cleanup/) | End-of-session GitHub housekeeping: scans open issues, open PRs, and local/remote branches, then proposes closing finished issues, merging ready PRs, and deleting merged branches — always reports first, never acts without explicit confirmation. |
+| [`issues-creator`](issues-creator/) | Deep multi-agent codebase audit (bugs, security, feature gaps, UI/UX, stale docs) via a `Workflow` script — produces a prioritized, deduplicated draft issue list; never files anything on GitHub without explicit approval. |
 
 ## Installing a skill
 
