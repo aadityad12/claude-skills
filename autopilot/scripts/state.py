@@ -23,6 +23,8 @@ DEFAULT_CONFIG = {
     "careful-label": "hard",
     "skip-labels": "stretch, tracking",
     "merge-method": "",  # empty: squash if allowed, else the repo's first allowed method
+    "worker-model": "sonnet",
+    "careful-model": "opus",
 }
 
 DEP_LINE = re.compile(r"^[\s*_>-]*(depends on|blocked by|requires)\b[\s*_:]*(.*)$", re.IGNORECASE)

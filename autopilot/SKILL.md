@@ -1,6 +1,8 @@
 ---
 name: autopilot
 description: Work through a GitHub repo's open issues on autopilot. Runs subagents in parallel (one issue each, in isolated git worktrees), keeps CI green, merges in dependency order, and stops only when the owner is needed, with an exact to-do list of what they must do, how long it takes, and what happens next. Use when the user types /autopilot (optionally "auto-merge" or "plan"), asks to "work through the issues", "keep going on the roadmap", "run the backlog", or replies to a previous autopilot report ("merge #12", "go", "done", "changes #12: ...").
+argument-hint: "[review | auto-merge | plan]"
+model: sonnet
 ---
 
 # Autopilot
@@ -67,6 +69,8 @@ configure the orchestrator; every other line is a project rule you must follow.
 - careful-label: hard              # never auto-merged; flag for careful review
 - skip-labels: stretch, tracking   # never started unless the owner asks
 - merge-method: squash             # default: squash if allowed
+- worker-model: sonnet             # model for issue subagents (a tier alias: haiku/sonnet/opus)
+- careful-model: opus              # model for careful-label issues
 - Benchmarks (scripts/bench.py) need an idle machine: ask the owner, stop all subagents first.
 ```
 
@@ -88,6 +92,8 @@ Repeat until nothing can move without the owner:
      evidence. Say so in the report, and treat the PR as needing review even in `auto-merge`.
 2. **Start ready issues** with the Agent tool: `isolation: "worktree"`,
    `run_in_background: true`, up to `max-parallel` at once, using the subagent prompt below.
+   Set the Agent tool's `model` to the config's `careful-model` for careful-label issues and
+   `worker-model` for everything else (see "Models" below).
    When there are more ready issues than slots, prefer issues that unblock the most others,
    and avoid running two issues at once that obviously edit the same files.
    - Issues with the owner label, or a project rule that needs the owner: start a subagent
@@ -166,6 +172,20 @@ Fill in `N`, the repo, and the default branch. Add any project rules from the co
 >    only the owner can give, finish everything else, push, and describe exactly what's needed.
 > 7. Final reply: PR URL; CI status; anything the owner must do, install, or decide (with
 >    exact steps); anything you did differently from the issue and why.
+
+## Models
+
+Use tier aliases (`haiku`, `sonnet`, `opus`), never versioned model IDs: an alias always
+resolves to the newest model in that tier, so this skill never goes stale.
+
+- **Orchestrator:** `sonnet` (this skill's frontmatter). Orchestration is judgment-light: read
+  state, route work, merge, write reports. The frontmatter override only lasts for the turn the
+  skill runs in; each resume re-invokes the skill and re-applies it.
+- **Workers:** `worker-model` (default `sonnet`) for ordinary issues; `careful-model` (default
+  `opus`) for careful-label issues, where subtle bugs are expensive (concurrency, codegen,
+  memory models, security).
+- If a worker fails the same issue twice on `worker-model`, retry once on `careful-model`
+  before escalating to the owner, and say so in the report.
 
 ## Rules
 
