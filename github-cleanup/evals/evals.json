@@ -45,6 +45,21 @@
         "The default/protected branch (main) never appears as a deletion candidate",
         "No actual gh issue close / gh pr merge / git branch -d / git push --delete command was run"
       ]
+    },
+    {
+      "id": 4,
+      "name": "squash-merged-branches-and-agent-worktrees",
+      "prompt": "wrap up this repo for me -- an autopilot run just finished and I think it left branches and worktrees everywhere",
+      "expected_output": "Runs the scan in a repo where PRs were squash-merged and agent worktrees exist. Proposes deleting squash-merged branches (how == merged_pr, naming the PR) and removing worktrees whose branch landed via a merged PR, while leaving locked worktrees, dirty worktrees, worktrees with open PRs, and worktrees with no merged PR (possible live sessions) in report-only. Asks for one confirmation; executes nothing.",
+      "files": [],
+      "expectations": [
+        "Squash-merged branches are proposed for deletion with the PR that merged them, not reported as unmerged",
+        "Any branch with commits after its merged PR's head is report-only, never proposed for deletion",
+        "Locked worktrees, worktrees with uncommitted changes, and worktrees with no merged PR are report-only",
+        "Branches checked out in a worktree are not proposed for direct deletion",
+        "If git branch -D is mentioned, it is only for merged_pr branches with the tip re-verified against the PR head",
+        "The output ends by asking for confirmation; no close/merge/delete/worktree-remove command was run"
+      ]
     }
   ]
 }
