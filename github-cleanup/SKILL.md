@@ -1,14 +1,16 @@
 ---
 name: github-cleanup
-description: End-of-session GitHub housekeeping for the current repo -- scans open issues, open PRs, and local/remote branches, then proposes closing finished issues, merging ready PRs, and deleting merged branches. Use this whenever the user wants to "clean up" a repo, "wrap up" or "close out" a session, tidy up issues/PRs/branches before stepping away, or asks things like "anything to merge or close before I go?" -- even if they don't name the skill directly. Always scan and report before touching anything; never close an issue, merge a PR, or delete a branch without the user's explicit go-ahead on that specific batch of actions.
+description: End-of-session GitHub housekeeping for the current repo -- scans open issues, open PRs, local/remote branches, and git worktrees, then proposes closing finished issues, merging ready PRs, deleting merged branches (including squash-merged ones), and removing finished worktrees. Use this whenever the user wants to "clean up" a repo, "wrap up" or "close out" a session, tidy up issues/PRs/branches before stepping away, or asks things like "anything to merge or close before I go?" -- even if they don't name the skill directly. Always scan and report before touching anything; never close an issue, merge a PR, or delete a branch without the user's explicit go-ahead on that specific batch of actions.
+model: sonnet
 ---
 
 # GitHub Cleanup
 
 A repo accumulates loose ends during a working session: issues that got fixed
 but never got closed, PRs that are green and ready but just sitting there,
-branches that were merged weeks ago and are still cluttering `git branch`.
-This skill's job is to sweep all three, tell the user exactly what it found
+branches that were merged weeks ago and are still cluttering `git branch`,
+worktrees left behind by agents after their PRs merged.
+This skill's job is to sweep all of it, tell the user exactly what it found
 and how confident it is about each item, and only act once they say go.
 
 The core principle: **scanning is read-only and can happen freely; closing,
@@ -28,9 +30,12 @@ repo they mean), run:
 python3 ~/.claude/skills/github-cleanup/scripts/scan_repo.py
 ```
 
-This is entirely read-only (`gh issue list`, `gh pr list`, `git branch
---merged`, plus a `gh api .../collaborators` call to gauge whether the repo
-looks solo or shared) and prints one JSON report. Requires `gh` to be
+This is read-only as far as GitHub and your branches are concerned (`gh issue
+list`, `gh pr list`, `git for-each-ref`, `git worktree list`, plus a `gh api
+.../collaborators` call to gauge whether the repo looks solo or shared). The
+one local write is `git fetch --prune`, so remote-branch data isn't stale; it
+changes nothing on GitHub or in any branch. It prints one JSON report. If
+`warnings` is non-empty (e.g. the fetch failed offline), mention it. Requires `gh` to be
 installed and authenticated (`gh auth status`) and the cwd to be inside a
 git repo with a GitHub remote -- if either isn't true, the script fails with
 an explanatory error; surface that to the user rather than trying to work
@@ -44,7 +49,8 @@ only one working on something, the conservative assumption is that you're not.
 ## Step 2: Read the report, don't just relay it
 
 The JSON has three top-level sections -- `issues`, `pull_requests`,
-`branches` -- each already bucketed by confidence/safety. Understand what
+`branches` (which includes `worktrees`) -- each already bucketed by
+confidence/safety. Understand what
 each bucket means before you write the user-facing summary:
 
 **Issues**
@@ -60,27 +66,38 @@ each bucket means before you write the user-facing summary:
   and issue title together and use judgment before even proposing it as a
   candidate. If it's not clearly the same piece of work, drop it rather than
   presenting a bad guess.
-- `stale_report_only` -- open issues with no merged-PR link at all. **Never
-  propose closing these.** Staleness is not completion; an issue with no
-  recent activity might just be low-priority, not done. Report them (e.g.
-  "these haven't moved in a while, might be worth triaging") but keep them
-  out of the confirmation batch entirely.
+- `open_no_linked_pr_report_only` -- open issues with no merged-PR link at
+  all. **Never propose closing these.** Staleness is not completion; an issue
+  with no recent activity might just be low-priority, not done. Each has
+  `days_since_update` and a `stale` flag (untouched 30+ days): mention the
+  stale ones as worth triaging, summarise the rest as a count, and keep all
+  of them out of the confirmation batch.
 
 **Pull requests**
-- `ready_to_merge` -- not a draft, no conflicts, CI passing (or no CI
-  configured), and review requirements satisfied. These are your merge
-  candidates.
-- `blocked` -- failing CI, conflicts, or review not yet satisfied. Report
-  why each one is blocked; don't try to fix or resolve the blocker yourself
-  (e.g. don't push commits to resolve conflicts) -- that's separate work
-  from cleanup.
+- `ready_to_merge` -- not a draft, and nothing in `blocked_reasons`: no
+  conflicts, CI passing (or no CI), branch protection satisfied, review not
+  pending. These are your merge candidates. If `no_ci` is true, say so next
+  to the item -- nothing automated has checked it.
+- `blocked` -- each has `blocked_reasons` (conflicts, CI failing or still
+  running, behind base, branch protection, review required, or GitHub still
+  computing mergeability). Report the reasons; don't try to fix or resolve
+  the blocker yourself (e.g. don't push commits to resolve conflicts) --
+  that's separate work from cleanup.
 - `draft_wip` -- leave these alone entirely, they're not report material
   unless the user asks.
 
 **Branches**
-- `local_merged_safe_to_delete` / `remote_merged_safe_to_delete` -- fully
-  merged into the default branch. Genuinely safe, but still confirm --
-  deleting is only reversible if the reflog hasn't expired.
+- `local_merged_safe_to_delete` / `remote_merged_safe_to_delete` -- each
+  item says `how` it's known to be merged:
+  - `merged_pr`: a merged PR's head is exactly this branch's tip. This is
+    how squash and rebase merges (GitHub's usual flow) are detected, which
+    `git branch --merged` alone misses entirely. Say which PR.
+  - `no_unique_commits`: the tip is already inside the default
+    branch; deleting loses nothing.
+  Genuinely safe, but still confirm.
+- `local_newer_than_merged_pr_report_only` / `remote_newer_...` -- a PR from
+  this branch merged, but the branch has commits **after** it. That newer
+  work isn't on the default branch. Report it; never propose deleting.
 - `local_unmerged_no_open_pr` -- not merged, and no open PR is using this
   branch. Could be abandoned work, could be something the user meant to
   come back to. Report it, do not propose deleting it.
@@ -92,6 +109,19 @@ each bucket means before you write the user-facing summary:
   branch plus common names like `develop`/`staging`/`production`/`release`).
   These never appear as delete candidates regardless of merge status --
   that's enforced by the script, not something you need to double-check.
+- `in_use_by_worktree_excluded` -- branches checked out in some worktree
+  (including the current one). Excluded from deletion; the worktree section
+  decides what happens to them.
+
+**Worktrees** (`branches.worktrees`)
+- `safe_to_remove` -- clean, not locked, and its branch landed through a
+  merged PR. Propose `git worktree remove <path>`, then deleting its branch.
+- `prunable` -- git already knows the directory is gone. Propose
+  `git worktree prune`.
+- `report_only` -- locked (an agent is probably using it right now), has
+  uncommitted changes, its branch has an open PR, or there's no merged PR
+  (which is also what a live Claude Code session's worktree looks like --
+  `claude_code_managed` flags those). **Never propose removing these.**
 
 If `repo_type` is `"shared"` (or `"unknown"`, per Step 1), raise your bar for
 anything in the `inferred_needs_confirmation` bucket -- on a repo other
@@ -119,8 +149,11 @@ confidence, before asking for confirmation. Something like:
   ...
 
 **Branches -- safe to delete (4 local, 2 remote)**
-- feature/issue-38-... (merged)
+- feature/issue-38-... (squash-merged in PR #58)
   ...
+
+**Worktrees -- safe to remove (1)**
+- .claude/worktrees/agent-... (branch 12-parser, merged in PR #61)
 
 **Reporting only, not proposing action:**
 - 3 stale issues with no linked PR (oldest: #12, untouched 40 days)
@@ -141,19 +174,26 @@ subset they specify), execute with plain `gh`/`git` commands:
 
 ```bash
 gh issue close <number> --comment "Closed via github-cleanup: resolved by PR #<n>"
-gh pr merge <number> --squash   # or whatever merge method the user/repo prefers -- ask if unclear
-git branch -d <branch>                      # local, merged
-git push origin --delete <branch>           # remote, merged
+gh pr merge <number> --squash      # first method in merge_methods_allowed, unless the user says otherwise
+git worktree remove <path>                   # never --force
+git worktree prune
+git branch -d <branch>                       # local, how == no_unique_commits
+git branch -D <branch>                       # local, how == merged_pr only (see below)
+git push <remote> --delete <branch>          # remote, merged
 ```
 
 A few things worth getting right here:
-- Use `-d` (safe delete) for local branches, never `-D` -- if git refuses
-  because it doesn't think the branch is merged, that's worth surfacing to
-  the user rather than force-deleting, since it means the script's merge
-  check and git's own check disagree (possible if the branch was merged via
-  squash/rebase rather than a fast-forward or ordinary merge commit, which
-  `--merged` doesn't always detect). Don't reach for `-D` to make the
-  problem go away.
+- Use `-d` (safe delete) for local branches. The **one** exception is a
+  branch whose `how` is `merged_pr`: git's `-d` refuses squash-merged
+  branches because their commits aren't in the default branch's history,
+  even though the PR merged exactly that tip. Right before `-D`, re-check
+  that `git rev-parse <branch>` still equals the merged PR's head
+  (`gh pr view <pr> --json headRefOid`). If it differs, stop and report --
+  new commits appeared. Never use `-D` for anything else, and never to make
+  a refusal go away.
+- Remove a worktree before deleting its branch (git won't delete a branch
+  that's checked out). If `git worktree remove` refuses, report it rather
+  than adding `--force`.
 - If `gh pr merge` reports the repo requires a specific merge method (merge
   commit vs. squash vs. rebase), just use what the repo enforces; don't
   fight it.
@@ -168,8 +208,10 @@ A few things worth getting right here:
   trace in gh's data, it won't surface as a candidate at all.
 - Doesn't touch unmerged branches, ever, regardless of staleness -- that's
   someone's in-progress or abandoned work, and telling those two apart
-  isn't something this skill tries to do.
+  isn't something this skill tries to do. Same for worktrees that are
+  locked, dirty, or have no merged PR.
 - Doesn't try to fix a blocked PR (resolve conflicts, push CI fixes, chase
   down a review) -- it reports the blocker and stops there.
-- Doesn't force anything (`-D`, `--force`, bypassing branch protection) --
-  if the safe path fails, report why instead of escalating to a riskier one.
+- Doesn't force anything (`--force`, bypassing branch protection, `-D`
+  outside the verified squash-merge case) -- if the safe path fails, report
+  why instead of escalating to a riskier one.
