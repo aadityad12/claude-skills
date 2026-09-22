@@ -89,11 +89,16 @@ each bucket means before you write the user-facing summary:
 **Branches**
 - `local_merged_safe_to_delete` / `remote_merged_safe_to_delete` -- each
   item says `how` it's known to be merged:
-  - `merged_pr`: a merged PR's head is exactly this branch's tip. This is
-    how squash and rebase merges (GitHub's usual flow) are detected, which
-    `git branch --merged` alone misses entirely. Say which PR.
-  - `no_unique_commits`: the tip is already inside the default
-    branch; deleting loses nothing.
+  - `ancestry`: the tip is inside the default branch AND a PR merged it
+    (named in `pr`). An ordinary merge commit. `git branch -d` accepts it.
+  - `no_unique_commits`: the tip is inside the default branch with no PR
+    behind it -- merged locally, or a branch nothing was ever committed to.
+    `-d` accepts it and deleting loses nothing.
+  - `merged_pr` (`safe_delete_refused: true`): the tip is NOT in the default
+    branch, but a merged PR's head is exactly this tip -- a squash or rebase
+    merge, GitHub's usual flow, which `git branch --merged` misses entirely.
+    This is the only case where `-d` refuses and `-D` is warranted. Say
+    which PR.
   Genuinely safe, but still confirm.
 - `local_newer_than_merged_pr_report_only` / `remote_newer_...` -- a PR from
   this branch merged, but the branch has commits **after** it. That newer
@@ -177,20 +182,22 @@ gh issue close <number> --comment "Closed via github-cleanup: resolved by PR #<n
 gh pr merge <number> --squash      # first method in merge_methods_allowed, unless the user says otherwise
 git worktree remove <path>                   # never --force
 git worktree prune
-git branch -d <branch>                       # local, how == no_unique_commits
-git branch -D <branch>                       # local, how == merged_pr only (see below)
+git branch -d <branch>                       # local: always try this first
+git branch -D <branch>                       # local, only how == merged_pr (see below)
 git push <remote> --delete <branch>          # remote, merged
 ```
 
 A few things worth getting right here:
-- Use `-d` (safe delete) for local branches. The **one** exception is a
-  branch whose `how` is `merged_pr`: git's `-d` refuses squash-merged
-  branches because their commits aren't in the default branch's history,
-  even though the PR merged exactly that tip. Right before `-D`, re-check
-  that `git rev-parse <branch>` still equals the merged PR's head
-  (`gh pr view <pr> --json headRefOid`). If it differs, stop and report --
-  new commits appeared. Never use `-D` for anything else, and never to make
-  a refusal go away.
+- **Always try `-d` (safe delete) first**, whatever `how` says. It succeeds
+  for `ancestry` and `no_unique_commits`, and it is the check that catches a
+  scanner/git disagreement.
+- The **one** case for `-D` is a branch whose `how` is `merged_pr`, where
+  `-d` genuinely refuses: a squash or rebase merge leaves the branch's
+  commits out of the default branch's history even though the PR merged
+  exactly that tip. Right before `-D`, re-check that `git rev-parse <branch>`
+  still equals the merged PR's head (`gh pr view <pr> --json headRefOid`).
+  If it differs, stop and report -- new commits appeared. Never use `-D` for
+  anything else, and never to make a refusal go away.
 - Remove a worktree before deleting its branch (git won't delete a branch
   that's checked out). If `git worktree remove` refuses, report it rather
   than adding `--force`.
