@@ -57,7 +57,7 @@
         "Any branch with commits after its merged PR's head is report-only, never proposed for deletion",
         "Locked worktrees, worktrees with uncommitted changes, and worktrees with no merged PR are report-only",
         "Branches checked out in a worktree are not proposed for direct deletion",
-        "If git branch -D is mentioned, it is only for merged_pr branches with the tip re-verified against the PR head",
+        "git branch -d is tried first for every branch; -D appears only for how == merged_pr branches whose tip was re-verified against the PR head",
         "The output ends by asking for confirmation; no close/merge/delete/worktree-remove command was run"
       ]
     }

@@ -247,17 +247,18 @@ def classify(names, tips, ancestry_merged, merged_prs_by_branch):
     for name in sorted(names):
         prs = merged_prs_by_branch.get(name, [])
         if name in ancestry_merged:
+            # The tip is already inside the default branch, so `git branch -d` accepts it.
+            item = {"branch": name, "how": "ancestry" if prs else "no_unique_commits"}
             if prs:
-                merged.append({"branch": name, "how": "merged_pr", "pr": prs[0]["number"]})
-            else:
-                # Tip is inside the default branch but no PR ever merged it: either merged
-                # locally, or a branch created and never committed to. Nothing is lost by
-                # deleting it either way.
-                merged.append({"branch": name, "how": "no_unique_commits"})
+                item["pr"] = prs[0]["number"]
+            merged.append(item)
             continue
         exact = [p for p in prs if p["headRefOid"] == tips[name]]
         if exact:
-            merged.append({"branch": name, "how": "merged_pr", "pr": exact[0]["number"]})
+            # Squash or rebase merge: the commits never entered the default branch, so `-d`
+            # will refuse even though the PR merged exactly this tip.
+            merged.append({"branch": name, "how": "merged_pr", "pr": exact[0]["number"],
+                           "tip": tips[name], "safe_delete_refused": True})
         elif prs:
             newer_work.append({"branch": name, "merged_prs": [p["number"] for p in prs],
                                "note": "branch has commits after its merged PR's head; not merged"})
